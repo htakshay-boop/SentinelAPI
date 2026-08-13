@@ -6,7 +6,7 @@ const detectionPatterns = [
     severity: "CRITICAL",
     baseScore: 90,
     patterns: [
-      /('|%27)\s*(or|and)\s+/i,
+      /('|%27)?\s*(or|and)\s+[\w'"]+\s*=\s*[\w'"]+/i,
       /\bunion\s+(all\s+)?select\b/i,
       /\bselect\s+.+\s+from\b/i,
       /\bdrop\s+table\b/i,
