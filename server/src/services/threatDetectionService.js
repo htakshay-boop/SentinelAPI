@@ -16,22 +16,26 @@ const requestTracker = new Map();
 // ============================================================
 
 const detectionPatterns = [
+  // ==========================================================
+  // SQL INJECTION
+  // ==========================================================
+
   {
     type: "SQL_INJECTION",
     severity: "CRITICAL",
     baseScore: 90,
 
     patterns: [
-      // OR/AND authentication bypass
+      // OR / AND authentication bypass
       /\b(or|and)\b\s+['"]?\w+['"]?\s*=\s*['"]?\w+['"]?/i,
 
-      // Exact common test: OR 1=1
+      // Common OR 1=1 / AND 1=1
       /\b(or|and)\b\s+1\s*=\s*1\b/i,
 
-      // UNION attacks
+      // UNION SELECT
       /\bunion\s+(all\s+)?select\b/i,
 
-      // SELECT ... FROM
+      // SELECT FROM
       /\bselect\s+.+\s+from\b/i,
 
       // Database modification
@@ -44,7 +48,7 @@ const detectionPatterns = [
       /--/,
       /\/\*/,
 
-      // Stored procedure / command execution
+      // Stored procedure execution
       /\bexec\s*\(/i,
     ],
 
@@ -86,18 +90,26 @@ const detectionPatterns = [
     baseScore: 75,
 
     patterns: [
-      /\.\.\//,
-      /\.\.\\/,
+      // Normal ../ traversal
+      /\.\.\//i,
+      /\.\.\\/i,
 
-      // Encoded ../
+      // URL encoded ../
       /%2e%2e%2f/i,
       /%2e%2e%5c/i,
       /\.\.%2f/i,
       /\.\.%5c/i,
 
-      // Double encoded traversal
+      // Double encoded ../
       /%252e%252e%252f/i,
       /%252e%252e%255c/i,
+
+      // Common sensitive files
+      /\/etc\/passwd/i,
+      /\/etc\/shadow/i,
+      /\/etc\/hosts/i,
+      /boot\.ini/i,
+      /win\.ini/i,
     ],
 
     description: "Possible path traversal attempt detected",
@@ -155,15 +167,28 @@ const normalizeInput = (value) => {
 };
 
 // ============================================================
-// DECODE URL ENCODED INPUT
+// SAFE URL DECODING
 // ============================================================
 
 const safelyDecode = (value) => {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
+  let decoded = value;
+
+  // Decode more than once so encoded attacks can still be detected.
+  for (let i = 0; i < 2; i++) {
+    try {
+      const next = decodeURIComponent(decoded);
+
+      if (next === decoded) {
+        break;
+      }
+
+      decoded = next;
+    } catch {
+      break;
+    }
   }
+
+  return decoded;
 };
 
 // ============================================================
@@ -183,7 +208,7 @@ const checkBruteForce = (ipAddress, endpoint) => {
 
   let requests = requestTracker.get(key) || [];
 
-  // Remove requests older than 60 seconds
+  // Remove old requests
   requests = requests.filter(
     (timestamp) => now - timestamp < windowMs
   );
@@ -193,7 +218,7 @@ const checkBruteForce = (ipAddress, endpoint) => {
 
   requestTracker.set(key, requests);
 
-  // Five or more requests within 60 seconds
+  // Five or more requests within one minute
   if (requests.length >= 5) {
     return {
       type: "BRUTE_FORCE",
@@ -219,24 +244,25 @@ const analyzeRequest = ({
   ipAddress = "unknown",
 }) => {
   const safeMethod = normalizeInput(method).toUpperCase();
+
   const safeEndpoint = normalizeInput(endpoint);
+
   const safePayload = normalizeInput(payload);
+
   const safeIpAddress = normalizeInput(ipAddress);
 
-  /*
-   * Analyze both original and URL-decoded input.
-   *
-   * Example:
-   *
-   * %27%20OR%201%3D1
-   *
-   * becomes:
-   *
-   * ' OR 1=1
-   */
-
+  // Decode URL-encoded values
   const decodedEndpoint = safelyDecode(safeEndpoint);
+
   const decodedPayload = safelyDecode(safePayload);
+
+  /*
+   * Analyze:
+   * - original endpoint
+   * - decoded endpoint
+   * - original payload
+   * - decoded payload
+   */
 
   const combinedInput = [
     safeMethod,
@@ -303,7 +329,7 @@ const analyzeRequest = ({
   }
 
   // ==========================================================
-  // CALCULATE FINAL RISK
+  // CALCULATE RISK SCORE
   // ==========================================================
 
   const highestIndividualRisk = Math.max(
@@ -313,8 +339,8 @@ const analyzeRequest = ({
   );
 
   /*
-   * Add 5 points when multiple attack types
-   * are detected in the same request.
+   * If multiple detection types occur together,
+   * add 5 points for each additional detection.
    */
 
   const combinedRisk =
@@ -327,7 +353,7 @@ const analyzeRequest = ({
   );
 
   // ==========================================================
-  // FIND PRIMARY DETECTION
+  // PRIMARY DETECTION
   // ==========================================================
 
   const primaryDetection = detections.reduce(
